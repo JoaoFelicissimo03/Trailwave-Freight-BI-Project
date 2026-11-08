@@ -1,11 +1,5 @@
-# BI Supply Chain Project — Python Dependencies
-# Install all dependencies with: pip install -r requirements.txt
-
-# Data manipulation
-pandas>=2.0.0
-
-# PostgreSQL connection
-psycopg2-binary>=2.9.0
-
-# Environment variable management
-python-dotenv>=1.0.0
+# Install with: pip install -r requirements.txt
+pandas>=2.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+notebook>=7.0
