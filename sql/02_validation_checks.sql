@@ -1,60 +1,64 @@
--- On-Time Rate by Shipping Mode
+-- =====================================================================
+-- Trailwave Freight - Supply Chain Report
+-- 02_validation_checks.sql
+-- Data quality checks after the ETL. Every query returns the rows that
+-- break a rule, so an empty result means the check passed.
+-- =====================================================================
 
-SELECT 
-    fs.shipping_mode,
-    COUNT(*) as total_shipments,
-    SUM(CASE WHEN fs.late_delivery_flag = FALSE THEN 1 ELSE 0 END) as on_time,
-    ROUND(SUM(CASE WHEN fs.late_delivery_flag = FALSE THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as on_time_rate
-FROM fact_shipments fs
-GROUP BY fs.shipping_mode
-ORDER BY on_time_rate DESC;
+-- 1. Row counts per table (reference: 180,519 items, 65,752 orders)
+SELECT 'fact_order_items' AS table_name, COUNT(*) AS row_count FROM fact_order_items
+UNION ALL SELECT 'distinct orders',          COUNT(DISTINCT order_id) FROM fact_order_items
+UNION ALL SELECT 'dim_date',                 COUNT(*) FROM dim_date
+UNION ALL SELECT 'dim_product',              COUNT(*) FROM dim_product
+UNION ALL SELECT 'dim_customer',             COUNT(*) FROM dim_customer
+UNION ALL SELECT 'dim_geography',            COUNT(*) FROM dim_geography
+UNION ALL SELECT 'dim_shipping_mode',        COUNT(*) FROM dim_shipping_mode;
 
--- Revenue and margin by market
+-- 2. Orders whose delivery fields differ between items (expect 0 rows)
+SELECT order_id
+FROM fact_order_items
+GROUP BY order_id
+HAVING COUNT(DISTINCT shipping_mode_id) > 1
+    OR COUNT(DISTINCT days_real) > 1
+    OR COUNT(DISTINCT delivery_status) > 1
+    OR COUNT(DISTINCT is_late) > 1;
 
-SELECT 
-    dr.market,
-    ROUND(SUM(fo.total_revenue)::numeric, 2) as total_revenue,
-    ROUND(AVG(fo.profit_margin)::numeric, 4) as avg_margin,
-    COUNT(*) as total_orders
-FROM fact_orders fo
-JOIN dim_region dr ON fo.region_id = dr.region_id
-GROUP BY dr.market
-ORDER BY total_revenue DESC;
+-- 3. Canceled items marked as late (expect 0 rows)
+SELECT order_item_id FROM fact_order_items WHERE is_canceled AND is_late;
 
---  Top 5 products with more delays
+-- 4. Late items without a late delivery status (expect 0 rows)
+SELECT order_item_id FROM fact_order_items
+WHERE is_late <> (delivery_status = 'Late delivery');
 
-SELECT 
-    dp.product_name,
-    COUNT(*) as late_deliveries
-FROM fact_shipments fs
-JOIN fact_orders fo ON fs.order_id = fo.order_id
-JOIN dim_product dp ON fo.product_id = dp.product_id
-WHERE fs.late_delivery_flag = TRUE
-GROUP BY dp.product_name
-ORDER BY late_deliveries DESC
-LIMIT 5;
+-- 5. Items shipped before they were ordered (expect 0 rows)
+SELECT f.order_item_id
+FROM fact_order_items f
+WHERE f.ship_date_id < f.order_date_id;
 
--- Margin evolution per YEAR
+-- 6. Item total is not sales minus discount, beyond 2 cents (expect 0 rows)
+SELECT order_item_id
+FROM fact_order_items
+WHERE ABS(item_total - (sales - discount_amount)) > 0.02;
 
+-- 7. Promised days in the fact table differ from the shipping mode (expect 0 rows)
+SELECT f.order_item_id
+FROM fact_order_items f
+JOIN dim_shipping_mode s ON s.shipping_mode_id = f.shipping_mode_id
+WHERE f.days_scheduled <> s.promised_days;
 
-SELECT 
-    dd.year,
-    ROUND(AVG(fo.profit_margin)::numeric, 4) as avg_margin,
-    ROUND(SUM(fo.total_revenue)::numeric, 2) as total_revenue
-FROM fact_orders fo
-JOIN dim_date dd ON fo.date_id = dd.date_id
-GROUP BY dd.year
-ORDER BY dd.year;
+-- 8. days_late is inconsistent with real and promised days (expect 0 rows)
+SELECT order_item_id
+FROM fact_order_items
+WHERE NOT is_canceled
+  AND days_late <> GREATEST(days_real - days_scheduled, 0);
 
--- Delays per segment
+-- 9. Countries that still look Spanish (expect 0 rows)
+SELECT DISTINCT country
+FROM dim_geography
+WHERE country ~ '[áéíóúñÁÉÍÓÚ]';
 
-SELECT 
-    dc.customer_segment,
-    COUNT(*) as total_shipments,
-    SUM(CASE WHEN fs.late_delivery_flag = TRUE THEN 1 ELSE 0 END) as late_deliveries,
-    ROUND(SUM(CASE WHEN fs.late_delivery_flag = TRUE THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as late_rate
-FROM fact_shipments fs
-JOIN fact_orders fo ON fs.order_id = fo.order_id
-JOIN dim_customer dc ON fo.customer_id = dc.customer_id
-GROUP BY dc.customer_segment
-ORDER BY late_rate DESC;
+-- 10. Dates outside the loaded calendar year range (expect 0 rows)
+SELECT DISTINCT d.year
+FROM fact_order_items f
+JOIN dim_date d ON d.date_id = f.order_date_id
+WHERE d.year NOT BETWEEN 2015 AND 2018;
