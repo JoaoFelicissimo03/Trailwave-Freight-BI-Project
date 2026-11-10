@@ -1,0 +1,266 @@
+// Trailwave Freight - report measures
+// Home table: _Measures. Every measure leaves out canceled and suspected-fraud orders.
+// Delivery fields repeat on every item of an order, so delivery measures work at order level.
+
+// ---------------------------------------------------------------------------
+// 1 Delivery
+// ---------------------------------------------------------------------------
+
+Orders =
+CALCULATE (
+    DISTINCTCOUNT ( fact_order_items[order_id] ),
+    fact_order_items[is_canceled] = FALSE ()
+)
+
+Late Orders =
+CALCULATE ( [Orders], fact_order_items[is_late] = TRUE () )
+
+On-Time Orders =
+[Orders] - [Late Orders]
+
+On-Time % =
+DIVIDE ( [On-Time Orders], [Orders] )
+
+Late Rate % =
+DIVIDE ( [Late Orders], [Orders] )
+
+Late Orders Share % =
+DIVIDE (
+    [Late Orders],
+    CALCULATE ( [Late Orders], ALLSELECTED ( dim_shipping_mode ) )
+)
+
+Avg Days Late =
+CALCULATE (
+    AVERAGEX (
+        VALUES ( fact_order_items[order_id] ),
+        CALCULATE ( MAX ( fact_order_items[days_late] ) )
+    ),
+    fact_order_items[is_late] = TRUE (),
+    fact_order_items[is_canceled] = FALSE ()
+)
+
+Avg Days Real =
+CALCULATE (
+    AVERAGEX (
+        VALUES ( fact_order_items[order_id] ),
+        CALCULATE ( MAX ( fact_order_items[days_real] ) )
+    ),
+    fact_order_items[is_canceled] = FALSE ()
+)
+
+Avg Days Promised =
+CALCULATE (
+    AVERAGEX (
+        VALUES ( fact_order_items[order_id] ),
+        CALCULATE ( MAX ( fact_order_items[days_scheduled] ) )
+    ),
+    fact_order_items[is_canceled] = FALSE ()
+)
+
+// ---------------------------------------------------------------------------
+// 2 Sales
+// ---------------------------------------------------------------------------
+
+Revenue =
+CALCULATE (
+    SUM ( fact_order_items[item_total] ),
+    fact_order_items[is_canceled] = FALSE ()
+)
+
+Profit =
+CALCULATE (
+    SUM ( fact_order_items[profit] ),
+    fact_order_items[is_canceled] = FALSE ()
+)
+
+Profit Margin % =
+DIVIDE ( [Profit], [Revenue] )
+
+Revenue Share % =
+DIVIDE (
+    [Revenue],
+    CALCULATE ( [Revenue], ALLSELECTED ( dim_geography ) )
+)
+
+// From October 2017 the product catalogue shrinks, so later months are not comparable.
+Revenue to Sep 2017 =
+CALCULATE (
+    [Revenue],
+    KEEPFILTERS ( dim_date[full_date] <= DATE ( 2017, 9, 30 ) )
+)
+
+Revenue on Late Orders =
+CALCULATE ( [Revenue], fact_order_items[is_late] = TRUE () )
+
+Loss-Making Orders =
+CALCULATE (
+    COUNTROWS (
+        FILTER (
+            VALUES ( fact_order_items[order_id] ),
+            CALCULATE ( SUM ( fact_order_items[profit] ) ) < 0
+        )
+    ),
+    fact_order_items[is_canceled] = FALSE ()
+)
+
+Loss-Making Orders % =
+DIVIDE ( [Loss-Making Orders], [Orders] )
+
+// ---------------------------------------------------------------------------
+// 3 What-if (page 5)
+// Parameter table: First Class Target = SELECTCOLUMNS ( { 0, 0.2, 0.4, 0.6, 0.8, 1 }, "Target %", [Value] )
+// ---------------------------------------------------------------------------
+
+// Defaults to 60%, the level Standard Class reaches today.
+First Class Target Value =
+SELECTEDVALUE ( 'First Class Target'[Target %], 0.6 )
+
+First Class Orders =
+CALCULATE ( [Orders], KEEPFILTERS ( dim_shipping_mode[shipping_mode] = "First Class" ) )
+
+First Class On-Time Orders =
+CALCULATE ( [On-Time Orders], KEEPFILTERS ( dim_shipping_mode[shipping_mode] = "First Class" ) )
+
+First Class Late Orders =
+CALCULATE ( [Late Orders], KEEPFILTERS ( dim_shipping_mode[shipping_mode] = "First Class" ) )
+
+First Class Revenue on Late Orders =
+CALCULATE ( [Revenue on Late Orders], KEEPFILTERS ( dim_shipping_mode[shipping_mode] = "First Class" ) )
+
+Late Orders Avoided =
+VAR TargetOnTime = [First Class Orders] * [First Class Target Value]
+VAR OnTimeToday = [First Class On-Time Orders]
+RETURN
+    MAX ( 0, ROUND ( TargetOnTime - OnTimeToday, 0 ) )
+
+Late Orders With Target =
+[Late Orders] - [Late Orders Avoided]
+
+On-Time % With Target =
+DIVIDE ( [On-Time Orders] + [Late Orders Avoided], [Orders] )
+
+On-Time Gain (pts) =
+[On-Time % With Target] - [On-Time %]
+
+// Assumes avoided orders carry the average revenue of First Class late orders.
+Revenue on Late Orders With Target =
+[Revenue on Late Orders]
+    - DIVIDE ( [Late Orders Avoided], [First Class Late Orders] )
+        * [First Class Revenue on Late Orders]
+
+// ---------------------------------------------------------------------------
+// 4 Data note
+// ---------------------------------------------------------------------------
+
+All Orders =
+DISTINCTCOUNT ( fact_order_items[order_id] )
+
+Canceled Orders =
+CALCULATE (
+    DISTINCTCOUNT ( fact_order_items[order_id] ),
+    fact_order_items[is_canceled] = TRUE ()
+)
+
+Selection Label =
+VAR Modes =
+    IF (
+        ISFILTERED ( dim_shipping_mode[shipping_mode] ),
+        CONCATENATEX ( VALUES ( dim_shipping_mode ), dim_shipping_mode[shipping_mode], ", ", dim_shipping_mode[promised_days], ASC ),
+        "All shipping modes"
+    )
+VAR Markets =
+    IF (
+        ISFILTERED ( dim_geography[market] ),
+        CONCATENATEX ( VALUES ( dim_geography[market] ), dim_geography[market], ", ", dim_geography[market], ASC ),
+        "All markets"
+    )
+VAR Segments =
+    IF (
+        ISFILTERED ( dim_customer[customer_segment] ),
+        CONCATENATEX ( VALUES ( dim_customer[customer_segment] ), dim_customer[customer_segment], ", ", dim_customer[customer_segment], ASC ),
+        "All segments"
+    )
+RETURN
+    Modes & " · " & Markets & " · " & Segments
+
+// ---------------------------------------------------------------------------
+// 5 Visual helpers
+// Small measures that limit a chart to its top items or return a colour.
+// They keep Top-N and colour rules in DAX, so each visual stays simple.
+// ---------------------------------------------------------------------------
+
+// Page 3 matrix: the 7 regions with most orders, ranked across all shipping modes.
+On-Time % (Top 7 Regions) =
+VAR RegionOrders =
+    CALCULATE ( [Orders], ALLSELECTED ( dim_shipping_mode ) )
+VAR RankPos =
+    RANKX (
+        ALLSELECTED ( dim_geography[region] ),
+        CALCULATE ( [Orders], ALLSELECTED ( dim_shipping_mode ) ),
+        RegionOrders,
+        DESC
+    )
+RETURN
+    IF ( NOT ISBLANK ( [On-Time %] ) && RankPos <= 7, [On-Time %] )
+
+On-Time Cell Color =
+VAR p = [On-Time %]
+RETURN
+    SWITCH (
+        TRUE (),
+        ISBLANK ( p ), BLANK (),
+        p >= 0.55, "#6D5BD0",
+        p >= 0.40, "#A99BE6",
+        p >= 0.10, "#DCD6F5",
+        "#F3D5CD"
+    )
+
+On-Time Cell Font Color =
+VAR p = [On-Time %]
+RETURN
+    IF ( NOT ISBLANK ( p ) && p >= 0.55, "#FFFFFF", "#14142B" )
+
+// Page 3 map: colour on a fixed 0% to 100% scale, so a flat result looks flat.
+Late Rate Map Color =
+VAR p = [Late Rate %]
+VAR HexDigits = "0123456789ABCDEF"
+VAR R = ROUND ( 243 + ( 194 - 243 ) * p, 0 )
+VAR G = ROUND ( 213 + ( 69 - 213 ) * p, 0 )
+VAR B = ROUND ( 205 + ( 45 - 205 ) * p, 0 )
+RETURN
+    IF (
+        ISBLANK ( p ),
+        BLANK (),
+        "#"
+            & MID ( HexDigits, INT ( R / 16 ) + 1, 1 ) & MID ( HexDigits, MOD ( R, 16 ) + 1, 1 )
+            & MID ( HexDigits, INT ( G / 16 ) + 1, 1 ) & MID ( HexDigits, MOD ( G, 16 ) + 1, 1 )
+            & MID ( HexDigits, INT ( B / 16 ) + 1, 1 ) & MID ( HexDigits, MOD ( B, 16 ) + 1, 1 )
+    )
+
+Orders (100+) =
+IF ( [Orders] >= 100, [Orders] )
+
+// Page 4 scatter: small countries swing a lot, so only countries with 300+ orders are shown.
+Profit Margin % (300+ Orders) =
+IF ( [Orders] >= 300, [Profit Margin %] )
+
+Late Rate % (Top 6 Exposure) =
+IF (
+    NOT ISBLANK ( [Late Rate %] )
+        && RANKX ( ALLSELECTED ( dim_product[category_name] ), [Revenue on Late Orders], , DESC ) <= 6,
+    [Late Rate %]
+)
+
+Revenue on Late Orders (Top 6 Exposure) =
+IF ( NOT ISBLANK ( [Late Rate % (Top 6 Exposure)] ), [Revenue on Late Orders] )
+
+Profit (Top 8 Categories) =
+IF (
+    NOT ISBLANK ( [Profit] )
+        && RANKX ( ALLSELECTED ( dim_product[category_name] ), [Profit], , DESC ) <= 8,
+    [Profit]
+)
+
+Profit Margin % (Top 8 Categories) =
+IF ( NOT ISBLANK ( [Profit (Top 8 Categories)] ), [Profit Margin %] )
