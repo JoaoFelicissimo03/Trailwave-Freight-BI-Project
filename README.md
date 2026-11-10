@@ -1,429 +1,202 @@
-# 📦 BI Supply Chain Dashboard
+<p align="center">
+  <img src="images/logo.png" alt="Trailwave Freight" width="320">
+</p>
 
-> An end-to-end Business Intelligence project simulating an executive cockpit for supply chain operations — built with PostgreSQL, Python, and Power BI.
+# Trailwave Freight | Supply Chain Delivery Report
 
-> **Screenshot - Executive Overview**
+A Power BI report for Trailwave Freight, a fictional logistics company. It uses the DataCo Smart Supply Chain dataset (180,519 order items, January 2015 to January 2018) to answer one question: where does the business win, and where does it lose?
 
-![Executive Dashboard](Executive_dashboard.png)
+The data is loaded into PostgreSQL with a Python notebook, checked with SQL, and modelled as a star schema in Power BI.
 
-> **Screenshot - Financial Performance
+![Overview page](images/overview.png)
 
-![Financial Dashboard](Financial_dashboard.png)
+## Business question
 
-> **Screenshot - Delivery Performance**
+An operations manager wants to know, in under a minute:
 
-![Delivery Dashboard](Delivery_dashboard.png)
----
+- Is the business healthy?
+- Do orders arrive when we promise they will?
+- Is the problem a place, a customer type or a product, or something else?
+- Do we make money everywhere?
+- What is the first thing worth fixing?
 
-## 📌 Table of Contents
+## Key findings
 
-- Business Problem
-- Dataset
-- Architecture
-- Tech Stack
-- Dashboard
-- KPIs & DAX Measures
-- Key Technical Challenges
-- Conclusions & Key Findings
-- How to Run
-- Project Structure
+All numbers leave out canceled and suspected-fraud orders (2,855 of 65,752 orders).
 
----
+- **The business earns well.** 62.9K orders, $31.64M in revenue, $3.81M in profit and a 12.0% margin.
+- **Most orders arrive late.** Only 42.7% arrive within the promised days. Late orders are 1.62 days late on average.
+- **The shipping mode explains the delays.** First Class is late on 100% of orders, Second Class on 80%, Same Day on 48.4% and Standard Class on 39.8%.
+- **The promise itself is wrong for the faster modes.** First Class promises 1 day and takes 2. Second Class promises 2 days and takes 4. Standard Class promises 4 days and takes 3.99.
+- **Customers, regions and categories do not explain the delays.** The late rate is 57.2% to 57.7% across the three customer segments, and the same pattern repeats in every region.
+- **Margin is steady, but one order in five loses money.** Margin is between 11.6% and 12.4% in every market, and 21.1% of orders have a profit below zero.
+- **First Class is the quickest win.** It is 27% of all late orders. If First Class reached the on-time rate that Standard Class has today (60%), 5,761 late orders would be avoided and the overall on-time rate would go from 42.7% to 51.8%.
 
-## 🎯 Business Problem
+## Report structure
 
-A logistics company is experiencing delivery delays, overstock in some product lines and stockouts in others. The Operations Director needs a **daily executive cockpit** that answers four critical questions at a glance:
+The report has five pages (1280 x 720). The Mode, Market and Segment filters in the header apply to every page, and each page ends with a key takeaway and a button to the next page.
 
-- Are we delivering on time — and if not, where are we failing?
-- Where are we losing money in logistics?
-- Which products and regions are the most problematic?
-- How is gross margin evolving over time?
+### 1. Overview
 
-This dashboard was designed to answer all four questions without requiring the Director to run a single query or open a spreadsheet.
+Six headline numbers, orders per month, revenue per month and revenue share by market. Revenue is shown only until September 2017, because the product catalogue shrinks from October 2017 and later months are not comparable.
 
----
+### 2. Deliveries
 
-## 🗂️ Dataset
+![Deliveries page](images/deliveries.png)
 
-|Field|Detail|
+Promised against real days by shipping mode, on-time against late by mode, and the late rate by customer segment.
+
+### 3. Hotspots
+
+![Hotspots page](images/hotspots.png)
+
+A matrix of on-time % by region and shipping mode (the 7 regions with the most orders), a map of the late rate by country (countries with 100 or more orders) and the late rate for the 6 categories with the most revenue on late orders. The map uses the Azure Maps visual.
+
+### 4. Money
+
+![Money page](images/money.png)
+
+Profit, margin and the share of loss-making orders, profit for the 8 most profitable categories, revenue against margin by country (300 or more orders) and margin by market.
+
+### 5. Action
+
+![Action page](images/action.png)
+
+A what-if for First Class. Pick an on-time target from 0% to 100%, and the page shows the late orders avoided, the new overall on-time rate and the revenue still sitting on late orders. It opens at 60%, the level Standard Class reaches today. The page also lists three recommendations and the definitions and limits of the data.
+
+## Data model
+
+![Data model](images/data_model.png)
+
+The model is a star schema. All relationships are one-to-many from the fact table to a dimension, with single-direction filtering.
+
+| Table | Type | Rows | Description |
+|---|---|---|---|
+| `fact_order_items` | Fact | 180,519 | One row per order item, with delivery fields, quantity, revenue and profit |
+| `dim_date` | Dimension | 1,461 | One row per day. The order date relationship is active and the ship date relationship is inactive |
+| `dim_product` | Dimension | 118 | Product, category and department |
+| `dim_customer` | Dimension | 20,652 | Customer segment and location |
+| `dim_geography` | Dimension | 167 | Market, region and country |
+| `dim_shipping_mode` | Dimension | 4 | Shipping mode and promised days |
+| `First Class Target` | Disconnected | 6 | Drives the target selector on the Action page |
+| `_Measures` | Measures | | All measures, grouped in display folders |
+
+## Data preparation
+
+The Python notebook (`python/01_etl_pipeline.ipynb`) reads the raw CSV, builds the tables above and loads them into PostgreSQL. The main decisions:
+
+- Customer names, emails, passwords and street addresses are not loaded. The report does not need them.
+- Country names are translated from Spanish to English.
+- Delivery fields repeat on every item of an order, so delivery measures count distinct orders, not rows.
+- An order counts as canceled when its shipping was canceled or it is flagged as suspected fraud. These orders are excluded from every measure and every query.
+- The notebook checks its own output (row counts, keys, totals against the source) before it finishes.
+
+## SQL
+
+| File | What it does |
 |---|---|
-|**Name**|DataCo Smart Supply Chain for Big Data Analysis|
-|**Source**|Kaggle|
-|**Link**|[kaggle.com/datasets/shashwatwork/dataco-smart-supply-chain-for-big-data-analysis](https://www.kaggle.com/datasets/shashwatwork/dataco-smart-supply-chain-for-big-data-analysis)|
-|**Volume**|180,519 records — 53 columns|
-|**Format**|CSV|
-|**Period**|2015–2018|
+| `01_create_schema.sql` | Creates the star schema. Safe to re-run |
+| `02_validation_checks.sql` | Data quality checks. Each query returns the rows that break a rule, so an empty result means it passed |
+| `03_business_questions.sql` | Fourteen business questions, from headline KPIs to the First Class analysis |
+| `04_measure_checks.sql` | The same numbers as the report measures, to check the DAX against SQL |
 
-The dataset contains order, shipment, product, customer, and region data in a single flat file — making it a realistic starting point for Star Schema modelling, since real-world data rarely arrives pre-structured.
+## DAX highlights
 
-> **Note:** The dataset is not included in this repository due to file size. Download from Kaggle and place it in the `/data` folder before running the ETL notebook.
+The report has 40 measures (see `powerbi/measures.dax`).
 
----
-
-## 🏗️ Architecture
-
-The data was modelled into a **Star Schema** with 6 tables in PostgreSQL, separating facts from dimensions for optimal query performance and Power BI compatibility.
-
-```
-fact_orders
-├── order_id (PK)
-├── customer_id (FK → dim_customer)
-├── product_id (FK → dim_product)
-├── date_id   (FK → dim_date)
-├── region_id (FK → dim_region)
-├── quantity_ordered
-├── unit_price
-├── total_revenue
-└── profit_margin
-
-fact_shipments
-├── shipment_id (PK)
-├── order_id    (FK → fact_orders)
-├── date_id     (FK → dim_date)
-├── shipping_mode
-├── days_for_shipping_real
-├── days_for_shipment_scheduled
-├── late_delivery_flag
-└── shipping_cost
-```
-
-```
-dim_product    →  product_id, product_name, category, department, unit_cost
-dim_customer   →  customer_id, customer_segment, market, country
-dim_date       →  date_id, full_date, year, quarter, month, month_name, week, is_weekend
-dim_region     →  region_id, region, country, market
-```
-
-
-
----
-
-## 🛠️ Tech Stack
-
-| Tool                                         | Purpose                                                    |
-| -------------------------------------------- | ---------------------------------------------------------- |
-| **PostgreSQL**                               | Relational database — Star Schema design and storage       |
-| **Python** (pandas, psycopg2, python-dotenv) | ETL pipeline — data extraction, transformation and loading |
-| **Jupyter Notebook**                         | Interactive ETL development and documentation              |
-| **Power BI **                                | Data modelling, DAX measures, and dashboard visuals        |
-| **GitHub**                                   | Version control and portfolio                              |
-
----
-
-## 📊 Dashboard
-
-The dashboard is structured across **three pages**, each serving a distinct analytical purpose.
-
-### Page 1 — Executive Overview
-
-Designed for the Operations Director's daily briefing. Answers: _"How are we performing right now?"_
-
-| Visual     | Content                                            |
-| ---------- | -------------------------------------------------- |
-| Gauge      | On-Time Delivery Rate vs. 85% industry benchmark   |
-| Card       | Gross Margin %                                     |
-| Card       | Average Shipping Cost                              |
-| Card       | Average Delay Days                                 |
-| Card       | Total Orders                                       |
-| Card       | Total Revenue                                      |
-| Filled Map | Revenue by Geography — drill-down Region → Country |
-
-### Page 2 — Financial Performance
-
-Designed for financial analysis. Answers: _"Where are we making and losing money?"_
-
-|Visual|Content|
-|---|---|
-|Card|Total Revenue|
-|Card|Total Profit|
-|Bar Chart|Top 10 Categories by Revenue|
-|Line Chart|Gross Margin % Trend (drill-down Year → Quarter → Month)|
-|Table|Performance by Region — Revenue, Profit, Gross Margin %, On-Time Rate|
-
-### Page 3 — Delivery Performance
-
-Designed for operational deep-dive. Answers: _"Where and why are deliveries failing?"_
-
-| Visual         | Content                                                 |
-| -------------- | ------------------------------------------------------- |
-| Card           | Total Late Deliveries                                   |
-| Card           | Average Days Late                                       |
-| Combined Chart | On-Time Rate & Avg Days Late by Shipping Mode           |
-| Filled Map     | Late Delivery Rate by Country (green = low, red = high) |
-| Scatter        | Gross Margin % vs Avg Shipping Cost by Market & Country |
-
-Slicers are **synchronised across all three pages** — Year range, Region, Category, Customer Segment.
-
----
-
-## 📐 KPIs & DAX Measures
-
-All measures are stored in a dedicated `_Measures` table for organisation. Measures that cross fact tables use `TREATAS()` to propagate filter context.
+**Delivery measures work at order level.** Because delivery fields repeat on every item, the average days late takes one value per order first.
 
 ```dax
-Total Revenue =
-SUM(fact_orders[total_revenue])
-
-Total Orders =
-COUNTROWS(fact_orders)
-
-Total Profit =
-SUMX(fact_orders, fact_orders[total_revenue] * fact_orders[profit_margin])
-
-Gross Margin % =
-AVERAGE(fact_orders[profit_margin])
-
-Avg Shipping Cost =
-DIVIDE(SUM(fact_shipments[shipping_cost]), COUNTROWS(fact_orders))
-
-On-Time Delivery Rate =
-VAR FilteredOrders = VALUES(fact_orders[order_id])
-RETURN
-DIVIDE(
-    CALCULATE(
-        COUNTROWS(fact_shipments),
-        fact_shipments[late_delivery_flag] = FALSE(),
-        TREATAS(FilteredOrders, fact_shipments[order_id])
-    ),
-    CALCULATE(
-        COUNTROWS(fact_shipments),
-        TREATAS(FilteredOrders, fact_shipments[order_id])
-    )
-)
-
-Total Late Deliveries =
-VAR FilteredOrders = VALUES(fact_orders[order_id])
-RETURN
-CALCULATE(
-    COUNTROWS(fact_shipments),
-    fact_shipments[late_delivery_flag] = TRUE(),
-    TREATAS(FilteredOrders, fact_shipments[order_id])
-)
-
 Avg Days Late =
-VAR FilteredOrders = VALUES(fact_orders[order_id])
-RETURN
-CALCULATE(
-    AVERAGEX(
-        FILTER(fact_shipments, fact_shipments[late_delivery_flag] = TRUE()),
-        fact_shipments[days_for_shipping_real] - fact_shipments[days_for_shipment_scheduled]
+CALCULATE (
+    AVERAGEX (
+        VALUES ( fact_order_items[order_id] ),
+        CALCULATE ( MAX ( fact_order_items[days_late] ) )
     ),
-    TREATAS(FilteredOrders, fact_shipments[order_id])
-)
-
-Late Delivery Rate =
-VAR FilteredOrders = VALUES(fact_orders[order_id])
-RETURN
-DIVIDE(
-    CALCULATE(
-        COUNTROWS(fact_shipments),
-        fact_shipments[late_delivery_flag] = TRUE(),
-        TREATAS(FilteredOrders, fact_shipments[order_id])
-    ),
-    CALCULATE(
-        COUNTROWS(fact_shipments),
-        TREATAS(FilteredOrders, fact_shipments[order_id])
-    )
-)
-
-Avg Shipping Cost by Region =
-VAR FilteredOrders = VALUES(fact_orders[order_id])
-RETURN
-CALCULATE(
-    AVERAGEX(fact_shipments, fact_shipments[shipping_cost]),
-    TREATAS(FilteredOrders, fact_shipments[order_id])
+    fact_order_items[is_late] = TRUE (),
+    fact_order_items[is_canceled] = FALSE ()
 )
 ```
 
----
-
-## 🔧 Key Technical Challenges
-
-Several non-trivial problems were encountered and solved during this project.
-
-### 1. Timestamp duplicates in dim_date
-
-The raw `order date` column contained full timestamps (e.g. `2018-01-13 12:27:00`), causing `drop_duplicates()` to treat each unique minute as a distinct date — producing ~65,000 rows instead of ~1,127 unique dates. Fixed by converting with `pd.to_datetime()` and stripping the time component with `.dt.date` before deduplication.
-
-### 2. PostgreSQL connection state errors
-
-After a failed SQL transaction, psycopg2 enters an `InFailedSqlTransaction` state and blocks all subsequent commands. Fixed with `conn.rollback()` to reset the connection before retrying.
-
-### 3. Composite key for dim_region
-
-Region names are not globally unique — "Eastern Asia" maps to both China and Japan. A single `region` column as the join key produced an `InvalidIndexError` during the pandas lookup. Fixed by building a composite `(region, country)` index.
-
-### 4. Boolean type mismatch on insertion
-
-The `late_delivery_flag` column in the CSV is stored as integer (0/1). PostgreSQL's BOOLEAN type rejected integer values on insert. Fixed with `.astype(bool)` before loading.
-
-### 5. Cross-filtering between two fact tables
-
-The model has two fact tables — `fact_orders` and `fact_shipments` — connected through `dim_date` and a 1:1 `order_id` relationship. Slicers on `dim_region`, `dim_product`, and `dim_customer` filtered `fact_orders` correctly but did not propagate to `fact_shipments`, leaving all shipment-level KPIs unresponsive.
-
-Solved using `TREATAS()` in DAX — applied consistently across all shipment measures:
+**What-if for First Class.** The selected target is multiplied by the number of First Class orders. The difference with today's on-time orders is the number of late orders avoided.
 
 ```dax
-VAR FilteredOrders = VALUES(fact_orders[order_id])
-RETURN CALCULATE(
-    ...,
-    TREATAS(FilteredOrders, fact_shipments[order_id])
+Late Orders Avoided =
+VAR TargetOnTime = [First Class Orders] * [First Class Target Value]
+VAR OnTimeToday = [First Class On-Time Orders]
+RETURN
+    MAX ( 0, ROUND ( TargetOnTime - OnTimeToday, 0 ) )
+```
+
+**Top-N in DAX.** Visuals that show only the top items use a small measure, so the rule is visible in the model and not hidden in a visual's settings.
+
+```dax
+Profit (Top 8 Categories) =
+IF (
+    NOT ISBLANK ( [Profit] )
+        && RANKX ( ALLSELECTED ( dim_product[category_name] ), [Profit], , DESC ) <= 8,
+    [Profit]
 )
 ```
 
-This propagates the filtered `order_id` context from `fact_orders` into `fact_shipments`, making all slicers work correctly across both fact tables.
+Other techniques: colours returned by measures (the matrix and the map), a selection label that describes the active filters, and a fixed colour scale so that a flat result looks flat.
 
----
+## Design
 
-## 📌 Conclusions & Key Findings
+The page backgrounds contain only shapes: the white sheet, the sidebar, the cards and the filter pills. All text and numbers are Power BI visuals. Colours: purple `#6D5BD0` for the brand, near-black `#14142B` for emphasis and rust `#C2452D` for late orders. The theme is stored in the report.
 
-This analysis covers **65,752 orders** across **180,519 records** from 2015 to 2018, generating **$12.77M in total revenue** and **$1.54M in total profit** across global markets.
+## How to open the report
 
-### 1. Geographic Revenue Concentration
+1. Install [Power BI Desktop](https://www.microsoft.com/power-bi/desktop) (free).
+2. Download this repository and open `powerbi/trailwave_supply_chain.pbix`.
 
-The United States is by far the highest revenue-generating country, producing nearly double that of Mexico ($1.40B vs ~$751M), representing a significant concentration risk. At market level, **LATAM leads with $2.9B**, followed by **Europe at $2.66B**. Africa is the only market below $1B at $638M — and combined with the highest late delivery rates in the scatter analysis, suggests that both commercial penetration and operational reliability remain underdeveloped in that region.
+The data is imported into the file, so you do not need the CSV or a database to open it. If the map does not load, check that map visuals are enabled in *File > Options and settings > Options > Security*.
 
-### 2. On-Time Delivery Crisis
+## How to reproduce the data
 
-The overall **On-Time Delivery Rate of 45.18%** is critically below the **85% industry benchmark** — meaning more than half of all orders arrive late. This is not an isolated problem: **36,050 late deliveries** span all regions, segments, and shipping modes, indicating a systemic operational failure.
+1. Install PostgreSQL and create a database called `trailwave`.
+2. Download the dataset (see `data/README.md`) and place `DataCoSupplyChainDataset.csv` in the `data/` folder.
+3. Install the packages: `pip install -r requirements.txt`.
+4. Copy `.env.example` to `.env` and fill in your connection details.
+5. Run `python/01_etl_pipeline.ipynb` from top to bottom. It creates the schema by running `sql/01_create_schema.sql`, so you do not need to run that file yourself.
+6. Run `sql/02_validation_checks.sql`, `sql/03_business_questions.sql` and `sql/04_measure_checks.sql` in your SQL client.
 
-The breakdown by shipping mode reveals the most alarming finding in the dataset:
-
-|Shipping Mode|On-Time Rate|
-|---|---|
-|Standard Class|61.87%|
-|Same Day|53.85%|
-|Second Class|23.28%|
-|**First Class**|**4.73%**|
-
-**First Class — the most premium shipping option — has only a 4.73% on-time rate**, with Second Class averaging 2.5 days late when delayed. Customers paying for priority delivery are receiving the worst service in the portfolio. This warrants immediate carrier-level investigation.
-
-Late delivery rates are virtually identical across all customer segments — Home Office (55.23%), Corporate (54.75%), Consumer (54.73%) — confirming the problem is structural and not driven by order type.
-
-### 3. Gross Margin Stability with a 2018 Anomaly
-
-Gross margin remained stable between **10% and 15%** throughout 2015–2017. However, 2018 shows a decline to **9.23%** alongside a dramatic revenue drop to $331K vs $5.07M in 2017. This almost certainly reflects **incomplete 2018 data** rather than a genuine collapse — but if complete, would represent an existential crisis requiring immediate investigation.
-
-### 4. Revenue Concentration by Category
-
-The top three categories — **Men's Footwear ($1.55M), Fishing ($1.49M), Water Sports ($1.44M)** — are tightly clustered. However, there is a significant revenue cliff between 9th and 10th place (Computers at $0.28M vs the cluster above $0.66M), suggesting the bottom categories have limited commercial relevance and may warrant a strategic catalogue review.
-
-### 5. Profitability vs Volume Paradox
-
-**Central America** generates the highest absolute profit ($197K on $1.61M revenue), followed by **Western Europe** ($172K on $1.42M). However, the most interesting finding lies in smaller markets: **East Africa has the highest gross margin at 17.09%** but only $18K in total profit due to low volume. **Central Asia** shows 14.19% margin on just $4,230 in profit.
-
-This reveals a classic profitability paradox — the markets with the best unit economics are too small to scale. A targeted volume expansion strategy in East Africa and Central Asia, contingent on first improving delivery reliability, could yield disproportionate profit gains.
-
-### 6. Shipping Cost and Negative Margin Countries
-
-The scatter analysis reveals that most countries operate with positive margins, but a cluster concentrated in **Africa and Pacific Asia** shows negative gross margins. These countries typically have very low order volumes (1–15 orders), making the averages statistically fragile — a single loss-making order can produce a dramatically negative result. **Swaziland** stands out as the highest average shipping cost country at **$316 per order** while maintaining a positive 9% gross margin, demonstrating that high logistics costs alone do not determine profitability.
-
-### 7. Most Delayed Products
-
-|Product|Late Deliveries|
-|---|---|
-|Nike Men's CJ Elite 2 TD Football Cleat|6,809|
-|Perfect Fitness Perfect Rip Deck|3,934|
-|Pelican Sunstream 100 Kayak|3,807|
-|Nike Men's Dri-FIT Victory Golf Polo|2,800|
-|Diamondback Women's Serene Classic Comfort Bi|2,450|
-
-The Nike Men's CJ Elite has nearly **double** the late deliveries of the second-worst product. Given its position as a high-revenue item, the business impact of its delivery failures is compounded — making it the first priority for supply chain investigation.
-
-### Summary of Priority Actions
-
-1. **Investigate First Class shipping carriers immediately** — 4.73% on-time rate on the premium tier is commercially unacceptable
-2. **Focus delivery improvement on the Nike Men's CJ Elite** — highest volume, highest late delivery count
-3. **Validate 2018 data completeness** — the revenue drop is anomalous and requires confirmation
-4. **Explore volume expansion in East Africa and Central Asia** — best margin profiles in the portfolio, currently underserved
-5. **Audit loss-making countries in Africa and Pacific Asia** — low volume makes data fragile, but the pattern warrants monitoring
-
----
-
-## 🚀 How to Run
-
-### Prerequisites
-
-- Python 3.8+
-- PostgreSQL 13+
-- Power BI Desktop
-
-### Setup
-
-1. Clone this repository:
-
-```bash
-git clone https://github.com/your-username/bi-supply-chain.git
-cd bi-supply-chain
-```
-
-2. Install Python dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-3. Download the dataset from [Kaggle](https://www.kaggle.com/datasets/shashwatwork/dataco-smart-supply-chain-for-big-data-analysis) and place it in `/data`
-    
-4. Create a PostgreSQL database named `supply_chain`
-    
-5. Create a `.env` file in the root folder:
-    
+## Repository structure
 
 ```
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=supply_chain
-DB_USER=postgres
-DB_PASSWORD=your_password
-DATA_PATH=data/DataCoSupplyChainDataset.csv
+powerbi/
+  trailwave_supply_chain.pbix   Power BI report
+  measures.dax                  All measures, for reading on GitHub
+python/
+  01_etl_pipeline.ipynb         Load the CSV into PostgreSQL
+sql/
+  01_create_schema.sql          Star schema
+  02_validation_checks.sql      Data quality checks
+  03_business_questions.sql     Business questions
+  04_measure_checks.sql         Checks of the report numbers
+data/
+  README.md                     Where to download the dataset
+images/                         Logo and screenshots used in this README
+.env.example                    Template for the database connection
+requirements.txt
+LICENSE
+README.md
 ```
 
-6. Run the SQL script to create the schema:
+## About the data
 
-```bash
-psql -U postgres -d supply_chain -f sql/01_create_tables.sql
-```
+Trailwave Freight is a fictional brand. The data comes from the DataCo Smart Supply Chain dataset (Pereira, 2019), published under CC BY 4.0 on [Mendeley Data](https://data.mendeley.com/datasets/8gx2fvg2k6/5). Three things to know when reading the report:
 
-7. Run the ETL notebook top to bottom:
+- The dataset has no shipping cost, so profit is the profit of the order itself.
+- Each market has orders only in certain periods, so markets are compared on totals and not over time.
+- The delivery times look simulated. For example, First Class always takes 2 days.
 
-```
-notebooks/01_etl_pipeline.ipynb
-```
+## Author
 
-8. Open `powerbi/supply_chain.pbix` in Power BI Desktop
+**João Felicíssimo**
+Data Analyst | Power BI | SQL | Python
+[LinkedIn](https://www.linkedin.com/in/joaofelicissimo07/) · [GitHub](https://github.com/JoaoFelicissimo03)
 
----
+## License
 
-## 📁 Project Structure
-
-```
-bi-supply-chain/
-│
-├── data/                              ← not tracked by Git (file too large)
-│   └── DataCoSupplyChainDataset.csv
-│
-├── notebooks/
-│   └── 01_etl_pipeline.ipynb         ← Python ETL: extract, transform, load
-│
-├── sql/
-│   ├── 01_create_tables.sql          ← Star Schema DDL
-│   └── 02_questions.sql              ← Analytical queries used for conclusions
-│
-├── powerbi/
-│   ├── supply_chain.pbix             ← Power BI report file
-│   └── dashboard_background.pptx    ← Custom slide backgrounds
-│
-├── docs/
-│   ├── erd.png                       ← Entity-Relationship Diagram
-│   └── dashboard_preview.png         ← Dashboard screenshot
-│
-├── .gitignore
-├── requirements.txt
-└── README.md
-```
-
----
-
-_Built in June 2026 — Portfolio project by João Ferlicíssimo
-_Dataset: DataCo Smart Supply Chain for Big Data Analysis (Kaggle)_
+Released under the [MIT License](LICENSE).
